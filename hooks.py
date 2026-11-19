@@ -20,7 +20,6 @@ from mindroom.judgment.state import (
 )
 from mindroom.mcp.config import resolved_mcp_tool_prefix
 from mindroom.mcp.registry import mcp_tool_name
-from mindroom.oauth.providers import is_oauth_connection_required_result
 from mindroom.plugin_api import ToolResultTransformContext, hook
 from mindroom.redaction import REDACTION_FAILED, redact_sensitive_text
 from mindroom.tool_system.plugins import config_plugins
@@ -146,11 +145,9 @@ def _matches(ctx: ToolResultTransformContext, patterns: tuple[str, ...]) -> bool
 
 
 def _is_control(text: str) -> bool:
-    """An OAuth connection prompt, which MindRoom keeps whole, or a mapping that may be one, such as a dict's repr."""
-    # A dict result reaches the hooks as its repr, which need not parse; any mapping naming the field counts.
-    return is_oauth_connection_required_result(text) or (
-        text.lstrip().startswith("{") and "oauth_connection_required" in text
-    )
+    """Whether the text may be an OAuth connection prompt, which MindRoom keeps whole, so a mark would be dropped."""
+    # Any form MindRoom recognizes (JSON, a dict's or OrderedDict's repr) names this field; it errs toward withholding.
+    return "oauth_connection_required" in text
 
 
 def _cut_note(ctx: ToolResultTransformContext, max_chars: int) -> str:
