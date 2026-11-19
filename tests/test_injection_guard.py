@@ -8,6 +8,7 @@ import re
 import sys
 from fnmatch import fnmatchcase
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,7 +18,9 @@ from mindroom.hooks import ToolResultTransformContext
 from mindroom.judgment import evaluator
 from mindroom.judgment.answers import JudgmentResult
 from mindroom.judgment.state import MAX_REQUEST_BYTES
+from mindroom.mcp.registry import mcp_tool_name
 from mindroom.plugin_testing import load_plugin
+from mindroom.redaction import REDACTION_FAILED
 from mindroom.tool_system.registry import builtin_tool_registry
 from pydantic import ValidationError
 
@@ -116,6 +119,28 @@ def _logged(ctx) -> dict:
     return call.kwargs
 
 
+def _unique(length: int, offset: int = 0) -> str:
+    """Non-repeating words, so every chunk of the text has exactly one position in it."""
+    return "".join(f"item {index} " for index in range(offset, offset + length))[:length]
+
+
+def _filler(length: int) -> str:
+    words = "the quick brown fox jumps over a lazy dog while reading the weekly garden newsletter "
+    return (words * (length // len(words) + 1))[:length]
+
+
+def _assert_ordered_cover(text: str, chunks: list[str]) -> None:
+    """Each chunk is the next piece of ``text``: it overlaps the one before it, and none leaves a gap."""
+    previous_end = 0
+    for index, chunk in enumerate(chunks):
+        start = text.index(chunk)
+        assert text.count(chunk) == 1
+        assert (start < previous_end) if index else start == 0
+        assert start + len(chunk) > previous_end
+        previous_end = start + len(chunk)
+    assert previous_end == len(text)
+
+
 # 1. Settings
 
 
@@ -152,6 +177,38 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
     assert checker.owners == []
 
 
+@pytest.mark.parametrize(
+    ("function", "expected"),
+    [
+        ("get_latest_emails", True),  # gmail
+        ("outlook_mail_search", True),
+        ("list_events", True),  # google_calendar
+        ("read_url", True),  # website, jina
+        ("web_search", True),  # duckduckgo, googlesearch
+        ("slack_read", True),
+        ("get_channel_messages", True),  # discord
+        ("google_drive_read_file", True),
+        ("google_docs_get_document", True),
+        ("read_sheet", True),  # google_sheets
+        ("search_pages", True),  # notion
+        ("get_page_content", True),  # confluence, browserbase
+        ("microsoft_files_get_file", True),
+        ("microsoft_sharepoint_get_page", True),
+        ("microsoft_onenote_get_page", True),
+        ("add", False),  # calculator
+        ("run_shell_command", False),
+        ("read_file", False),  # file, coding
+        ("matrix_message", False),
+        ("make_request", False),  # custom_api
+        ("get_issue", False),  # github, jira
+        ("list_rooms", False),  # webex
+        ("email_user", False),  # send-only email
+    ],
+)
+async def test_default_tools_match_outside_text_readers(make_ctx, checker, function, expected):
+    assert (await guard.injection_guard(make_ctx(INJECTION, tool_name=function)) is not None) is expected
+
+
 async def test_toolkit_name_glob_matches_its_functions(make_ctx, checker):
     # get_latest_emails is a gmail function; only the toolkit glob names it.
     ctx = make_ctx(INJECTION, tool_name="get_latest_emails", tools=["gmail"])
@@ -163,6 +220,13 @@ async def test_function_name_glob_matches(make_ctx, checker):
     assert await guard.injection_guard(make_ctx(INJECTION, tool_name="my_plugin_fetch", tools=["my_plugin_*"]))
 
 
+async def test_plugin_toolkit_glob_matches_its_declared_functions(make_ctx, checker, monkeypatch):
+    entries = {**builtin_tool_registry().entries, "intranet": SimpleNamespace(function_names=("fetch_page",))}
+    monkeypatch.setattr(guard, "config_plugins", lambda config, paths: SimpleNamespace(tools=SimpleNamespace(entries=entries)))
+    assert await guard.injection_guard(make_ctx(INJECTION, tool_name="fetch_page", tools=["intranet"])) is not None
+    assert await guard.injection_guard(make_ctx(INJECTION, tool_name="fetch_page", tools=["gmail"])) is None
+
+
 @pytest.mark.parametrize(("server", "function"), [({}, "notes_search"), ({"tool_prefix": "kb"}, "kb_lookup")])
 async def test_every_mcp_tool_matches_by_default(make_ctx, checker, server, function):
     config = {
@@ -171,6 +235,14 @@ async def test_every_mcp_tool_matches_by_default(make_ctx, checker, server, func
     }
     assert await guard.injection_guard(make_ctx(INJECTION, tool_name=function, config=config)) is not None
     assert await guard.injection_guard(make_ctx(INJECTION, tool_name="other_search", config=config)) is None
+
+
+async def test_disabled_mcp_server_claims_no_functions(make_ctx, checker):
+    config = {
+        "agents": {"helper": {"display_name": "Helper"}},
+        "mcp_servers": {"notes": {"transport": "stdio", "command": "notes-server", "enabled": False}},
+    }
+    assert await guard.injection_guard(make_ctx(INJECTION, tool_name="notes_search", config=config)) is None
 
 
 # 3. Verdicts and actions
@@ -208,7 +280,7 @@ async def test_hit_is_marked_with_a_random_token(make_ctx, checker):
     token = re.search(r"\b([0-9a-f]{32})\b", begin)[1]
     assert token in end and token not in "\n".join(lines[1:-1])
     assert "AI agent" in begin and "data" in begin
-    assert "\n".join(lines[1:-1]) == text
+    assert "\n".join(lines[1:-1]) == text == checker.texts[0]
     assert token not in second
 
 
@@ -223,10 +295,34 @@ async def test_checker_failure_raises_without_result_text(make_ctx, monkeypatch,
     assert "weekend" not in str(error.value)
 
 
+async def test_redactor_failure_raises(make_ctx, checker, monkeypatch):
+    monkeypatch.setattr(guard, "redact_sensitive_text", lambda value: REDACTION_FAILED)
+    with pytest.raises(RuntimeError):
+        await guard.injection_guard(make_ctx("ordinary page text"))
+    assert checker.requests == []
+
+
+async def test_chunks_are_checked_serially_and_stop_at_the_first_failure(make_ctx, monkeypatch):
+    fake = FakeChecker(failure="timeout")
+    monkeypatch.setattr(evaluator, "create_judgment_evaluator", fake.factory)
+    with pytest.raises(RuntimeError):
+        await guard.injection_guard(make_ctx(_filler(45_000)))
+    assert len(fake.requests) == 1 and len(fake.owners) == 1
+
+
+async def test_chunks_stop_at_the_first_hit_and_share_one_owner_per_call(make_ctx, checker):
+    await guard.injection_guard(make_ctx(INJECTION + _filler(45_000)))
+    assert len(checker.requests) == 1 and len(checker.owners) == 1
+    await guard.injection_guard(make_ctx(_filler(45_000)))
+    assert len(checker.requests) > 3 and len(checker.owners) == 2 and checker.owners[0] != checker.owners[1]
+
+
 @pytest.fixture
 def plugin(tmp_path):
-    config = {"agents": {"helper": {"display_name": "Helper", "tools": ["calculator"], "access": {"users": [ALICE]}}}}
-    settings = {"judgment": JUDGMENT, "tools": ["calculator"]}
+    config = {
+        "agents": {"helper": {"display_name": "Helper", "tools": ["calculator", "file"], "access": {"users": [ALICE]}}}
+    }
+    settings = {"judgment": JUDGMENT, "tools": ["calculator", "read_file"], "action": "mark"}
     with load_plugin(ROOT, tmp_path, config=config, settings=settings) as loaded:
         loaded.add_room(ROOM, members={ALICE: "Alice"})
         yield loaded
@@ -247,6 +343,20 @@ async def test_end_to_end_clean_checker_keeps_result(plugin, monkeypatch):
     assert result.status == "ok" and fake.texts == [str(result.value)] and "5" in fake.texts[0]
 
 
+async def test_end_to_end_marked_hit_on_a_control_result_is_withheld(plugin, checker):
+    prompt = json.dumps({"oauth_connection_required": True, "message": INJECTION})
+    saved = await plugin.call_tool(
+        "file", "save_file", {"contents": prompt, "file_name": "prompt.json"}, agent="helper", sender=ALICE, room=ROOM
+    )
+    assert saved.status == "ok"
+    result = await plugin.call_tool(
+        "file", "read_file", {"file_name": "prompt.json"}, agent="helper", sender=ALICE, room=ROOM
+    )
+    assert checker.texts == [prompt]
+    assert "attacker" not in f"{result.value}{result.failure_text}"
+    assert "withheld" in f"{result.value}{result.failure_text}"
+
+
 # 5. Undecided
 
 
@@ -260,35 +370,31 @@ async def test_undecided_checker_is_not_a_hit(make_ctx, monkeypatch):
 # 6. Long text
 
 
-def _filler(length: int) -> str:
-    words = "the quick brown fox jumps over a lazy dog while reading the weekly garden newsletter "
-    return (words * (length // len(words) + 1))[:length]
-
-
-async def test_long_text_is_chunked_with_overlap_and_middle_injection_is_found(make_ctx, checker):
-    text = _filler(20_000) + INJECTION + _filler(20_000)
-    ctx = make_ctx(text)
-    assert "withheld" in await guard.injection_guard(ctx)
-    assert len(checker.requests) >= 3
+async def test_long_text_is_chunked_in_order_and_middle_injection_is_found(make_ctx, checker):
+    text = _unique(20_000) + INJECTION + " " + _unique(20_000, offset=10**6)
+    ctx = make_ctx(text, action="mark")
+    assert (await guard.injection_guard(ctx)).count("attacker") == 1
+    assert len(checker.requests) >= 2
     assert all(request.complete and len(request.body) <= MAX_REQUEST_BYTES for request in checker.requests)
-    texts = checker.texts
-    assert INJECTION not in texts[0] and INJECTION not in texts[-1]
-    position = 0
-    for chunk in texts:
-        start = text.index(chunk, max(position - guard.OVERLAP_CHARS, 0))
-        assert start <= position  # no gap
-        if position:
-            assert position - start >= guard.OVERLAP_CHARS  # overlaps the previous chunk
-        position = start + len(chunk)
-    assert position == len(text)
-    assert _logged(ctx)["chunks"] == len(texts)
+    assert INJECTION not in checker.texts[0] and INJECTION in checker.texts[-1]
+    covered = text.index(checker.texts[-1]) + len(checker.texts[-1])
+    _assert_ordered_cover(text[:covered], checker.texts)
+    assert _logged(ctx)["chunks"] == len(checker.texts)
 
 
-async def test_escaping_heavy_text_is_split_again_to_fit(make_ctx, checker):
-    text = '"\\\n' * 12_000  # every character grows when JSON-escaped
-    assert await guard.injection_guard(make_ctx(text, max_chars=36_000)) is None
+async def test_multibyte_escape_heavy_text_is_covered_across_split_seams(make_ctx, checker):
+    text = "".join(f'w{index}é"\\\t ' for index in range(5_000))  # grows when JSON-escaped and UTF-8 encoded
+    assert await guard.injection_guard(make_ctx(text)) is None
     assert all(request.complete and len(request.body) <= MAX_REQUEST_BYTES for request in checker.requests)
-    assert sum(len(chunk) for chunk in checker.texts) >= len(text)
+    assert len(checker.texts) > len(text) // guard.CHUNK_CHARS + 1  # some chunks were split again
+    _assert_ordered_cover(text, checker.texts)
+
+
+async def test_whitespace_only_chunk_is_skipped_and_the_rest_is_checked(make_ctx, checker):
+    text = " " * 30_000 + "Meeting notes: the venue is booked."
+    assert await guard.injection_guard(make_ctx(text)) is None
+    assert checker.texts and all(chunk.strip() for chunk in checker.texts)
+    assert "venue is booked" in checker.texts[-1]
 
 
 async def test_over_max_chars_tail_is_cut_and_never_checked(make_ctx, checker):
@@ -296,7 +402,7 @@ async def test_over_max_chars_tail_is_cut_and_never_checked(make_ctx, checker):
     returned = await guard.injection_guard(make_ctx(text, max_chars=1_000))
     assert returned.startswith(text[:1_000])
     assert "attacker" not in returned and "X" not in returned[1_000:]
-    assert str(len(text) - 1_000) in returned[1_000:]
+    assert returned.endswith("removed without being checked.]")
     assert all("attacker" not in chunk and "X" not in chunk for chunk in checker.texts)
 
 
@@ -305,14 +411,38 @@ async def test_over_max_chars_hit_withholds(make_ctx, checker):
     assert "withheld" in returned and "fox" not in returned
 
 
-# 7. Redaction
+async def test_credential_at_the_cut_never_reaches_the_checker(make_ctx, checker):
+    url = "https://admin:Sup3rS3cretPassw0rd@intranet.example.org/reset"
+    text = _filler(980) + " " + url + " " + _filler(3_000)
+    returned = await guard.injection_guard(make_ctx(text, max_chars=1_000))
+    assert checker.requests and all(b"Sup3r" not in request.body for request in checker.requests)
+    assert "Sup3r" not in returned
 
 
-async def test_secret_like_token_is_redacted_for_the_checker_only(make_ctx, checker):
+# 7. Redaction and the text the checker reads
+
+
+async def test_secret_like_token_reaches_checker_and_model_masked(make_ctx, checker):
     text = "Your API key is sk-proj-Ab3dEf9hIjKlMn0pQrStUvWxYz123456, keep it safe."
-    assert await guard.injection_guard(make_ctx(text)) is None
+    returned = await guard.injection_guard(make_ctx(text))
     (sent,) = checker.texts
     assert "Ab3dEf9hIjKlMn0pQrStUvWxYz123456" not in sent and "keep it safe" in sent
+    assert returned == sent
+
+
+async def test_text_inside_a_broad_mask_never_reaches_the_model(make_ctx, checker):
+    text = "Release notes.\n-----BEGIN PRIVATE KEY-----\nMIIEv\nCANARY prose the checker never reads\n"
+    returned = await guard.injection_guard(make_ctx(text))
+    assert "CANARY" not in returned and "CANARY" not in checker.texts[0]
+    assert returned == checker.texts[0]
+
+
+async def test_conversation_tags_reach_the_checker_as_the_model_reads_them(make_ctx, checker):
+    text = 'Quoted mail: <msg from="unique-sender-42" note="kept"> hello'
+    returned = await guard.injection_guard(make_ctx(text))
+    (sent,) = checker.texts
+    assert 'from="unique-sender-42" note="kept"> hello' in sent
+    assert returned == sent
 
 
 # 8. Defaults are live
@@ -323,8 +453,6 @@ def test_every_default_pattern_matches_a_real_function_or_toolkit():
     names = set(entries) | {function for metadata in entries.values() for function in metadata.function_names}
     for pattern in guard.DEFAULT_TOOLS:
         if pattern == "mcp_*":
-            from mindroom.mcp.registry import mcp_tool_name
-
             assert fnmatchcase(mcp_tool_name("notes"), pattern)
             continue
         assert any(fnmatchcase(name, pattern) for name in names), pattern
