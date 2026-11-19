@@ -298,7 +298,7 @@ async def test_checker_failure_raises_without_result_text(make_ctx, monkeypatch,
 
 
 async def test_redactor_failure_raises(make_ctx, checker, monkeypatch):
-    monkeypatch.setattr(guard, "redact_sensitive_text", lambda value: REDACTION_FAILED)
+    monkeypatch.setattr(guard, "redact_sensitive_text", lambda value, **kw: REDACTION_FAILED)
     with pytest.raises(RuntimeError):
         await guard.injection_guard(make_ctx("ordinary page text"))
     assert checker.requests == []
@@ -359,6 +359,19 @@ async def test_end_to_end_marked_hit_on_a_control_result_is_withheld(plugin, che
     assert "withheld" in f"{result.value}{result.failure_text}"
 
 
+async def test_prose_mentioning_the_oauth_field_is_marked_not_withheld(make_ctx, checker):
+    for text in (
+        f"Docs: a tool sets oauth_connection_required to true when it needs a login. {INJECTION}",
+        json.dumps({"oauth_connection_required": False, "message": INJECTION}),
+    ):
+        assert (await guard.injection_guard(make_ctx(text, action="mark"))).startswith("[UNTRUSTED CONTENT")
+
+
+async def test_stringified_oauth_mapping_hit_is_withheld_under_mark(make_ctx, checker):
+    text = str({"oauth_connection_required": True, "message": INJECTION})  # a dict result reaches hooks as its repr
+    assert "withheld" in await guard.injection_guard(make_ctx(text, action="mark"))
+
+
 # 5. Undecided
 
 
@@ -378,10 +391,24 @@ async def test_long_text_is_chunked_in_order_and_middle_injection_is_found(make_
     assert (await guard.injection_guard(ctx)).count("attacker") == 1
     assert len(checker.requests) >= 2
     assert all(request.complete and len(request.body) <= MAX_REQUEST_BYTES for request in checker.requests)
-    assert INJECTION not in checker.texts[0] and INJECTION in checker.texts[-1]
-    covered = text.index(checker.texts[-1]) + len(checker.texts[-1])
-    _assert_ordered_cover(text[:covered], checker.texts)
+    assert INJECTION not in checker.texts[0] and INJECTION not in checker.texts[-1]
+    assert any(INJECTION in chunk for chunk in checker.texts)
+    _assert_ordered_cover(text, checker.texts)  # mark checks every chunk, not just up to the hit
     assert _logged(ctx)["chunks"] == len(checker.texts)
+
+
+async def test_mark_checks_every_chunk_after_an_early_hit(make_ctx, checker):
+    suffix = "benign closing line 7f3a9c"
+    text = INJECTION + " " + _unique(40_000) + suffix
+    returned = await guard.injection_guard(make_ctx(text, action="mark"))
+    assert len(checker.requests) > 2 and suffix in checker.texts[-1]
+    _assert_ordered_cover(text, checker.texts)
+    assert suffix in returned and returned.startswith("[UNTRUSTED CONTENT")
+
+
+async def test_withhold_still_stops_at_the_first_hit(make_ctx, checker):
+    returned = await guard.injection_guard(make_ctx(INJECTION + " " + _unique(40_000)))
+    assert len(checker.requests) == 1 and "withheld" in returned
 
 
 async def test_multibyte_escape_heavy_text_is_covered_across_split_seams(make_ctx, checker):
@@ -397,6 +424,13 @@ async def test_whitespace_only_chunk_is_skipped_and_the_rest_is_checked(make_ctx
     assert await guard.injection_guard(make_ctx(text)) is None
     assert checker.texts and all(chunk.strip() for chunk in checker.texts)
     assert "venue is booked" in checker.texts[-1]
+
+
+async def test_blank_result_over_max_chars_is_cut_without_a_check(make_ctx, checker):
+    returned = await guard.injection_guard(make_ctx(" " * 2_000, max_chars=1_000))
+    assert returned.startswith(" " * 1_000) and returned[1_000:].strip().endswith("removed without being checked.]")
+    assert not returned[1_000:].startswith(" ") and checker.owners == []
+    assert await guard.injection_guard(make_ctx(" " * 1_000, max_chars=1_000)) is None
 
 
 async def test_over_max_chars_tail_is_cut_and_never_checked(make_ctx, checker):
@@ -419,6 +453,26 @@ async def test_credential_at_the_cut_never_reaches_the_checker(make_ctx, checker
     returned = await guard.injection_guard(make_ctx(text, max_chars=1_000))
     assert checker.requests and all(b"Sup3r" not in request.body for request in checker.requests)
     assert "Sup3r" not in returned
+
+
+async def test_credential_at_the_outer_redaction_boundary_never_reaches_the_checker(make_ctx, checker):
+    # A long masked key shrinks the text, pulling whatever sits far past the cut into the kept part.
+    key = "-----BEGIN PRIVATE KEY-----\n" + "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n" * 140 + "-----END PRIVATE KEY-----\n"
+    url = "https://admin:Sup3rS3cretPassw0rd@intranet.example.org/reset"
+    for offset in range(-30, 30, 3):
+        checker.requests.clear()
+        head = key + _filler(5_000 - len(key) + offset)
+        returned = await guard.injection_guard(make_ctx(head + url + " " + _filler(3_000), max_chars=1_000))
+        assert all(b"Sup3r" not in request.body for request in checker.requests), offset
+        assert "Sup3r" not in returned and "S3cret" not in returned
+
+
+async def test_redactor_sentinel_is_recognized_for_tiny_caps(make_ctx, checker, monkeypatch):
+    real = guard.redact_sensitive_text
+    monkeypatch.setattr(guard, "redact_sensitive_text", lambda value, **kw: real(REDACTION_FAILED, **kw))
+    with pytest.raises(RuntimeError):
+        await guard.injection_guard(make_ctx("ordinary page text", max_chars=1))
+    assert checker.requests == []
 
 
 # 7. Redaction and the text the checker reads
