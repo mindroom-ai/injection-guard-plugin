@@ -222,7 +222,9 @@ async def test_function_name_glob_matches(make_ctx, checker):
 
 async def test_plugin_toolkit_glob_matches_its_declared_functions(make_ctx, checker, monkeypatch):
     entries = {**builtin_tool_registry().entries, "intranet": SimpleNamespace(function_names=("fetch_page",))}
-    monkeypatch.setattr(guard, "config_plugins", lambda config, paths: SimpleNamespace(tools=SimpleNamespace(entries=entries)))
+    monkeypatch.setattr(
+        guard, "config_plugins", lambda config, paths: SimpleNamespace(tools=SimpleNamespace(entries=entries))
+    )
     assert await guard.injection_guard(make_ctx(INJECTION, tool_name="fetch_page", tools=["intranet"])) is not None
     assert await guard.injection_guard(make_ctx(INJECTION, tool_name="fetch_page", tools=["gmail"])) is None
 
