@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 import re
 import secrets
@@ -147,16 +146,11 @@ def _matches(ctx: ToolResultTransformContext, patterns: tuple[str, ...]) -> bool
 
 
 def _is_control(text: str) -> bool:
-    """An OAuth connection prompt, as JSON or as the repr a dict result reaches the hooks as, which MindRoom keeps."""
-    if is_oauth_connection_required_result(text):
-        return True
-    if not text.lstrip().startswith("{"):
-        return False
-    try:
-        value = ast.literal_eval(text.strip())
-        return isinstance(value, dict) and is_oauth_connection_required_result(json.dumps(value, default=str))
-    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
-        return False
+    """An OAuth connection prompt, which MindRoom keeps whole, or a mapping that may be one, such as a dict's repr."""
+    # A dict result reaches the hooks as its repr, which need not parse; any mapping naming the field counts.
+    return is_oauth_connection_required_result(text) or (
+        text.lstrip().startswith("{") and "oauth_connection_required" in text
+    )
 
 
 def _cut_note(ctx: ToolResultTransformContext, max_chars: int) -> str:
