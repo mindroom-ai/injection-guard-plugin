@@ -1,0 +1,5 @@
+{
+  "name": "injection-guard",
+  "hooks_module": "hooks.py",
+  "mindroom_plugin_api": "1.32"
+}
