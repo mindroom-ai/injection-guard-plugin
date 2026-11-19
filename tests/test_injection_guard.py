@@ -6,6 +6,7 @@ import importlib.util
 import json
 import re
 import sys
+from collections import OrderedDict
 from datetime import date
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -360,20 +361,19 @@ async def test_end_to_end_marked_hit_on_a_control_result_is_withheld(plugin, che
     assert "withheld" in f"{result.value}{result.failure_text}"
 
 
-async def test_prose_mentioning_the_oauth_field_is_marked_not_withheld(make_ctx, checker):
-    for text in (
-        f"Docs: a tool sets oauth_connection_required to true when it needs a login. {INJECTION}",
-        json.dumps({"message": INJECTION}),
-    ):
+async def test_a_hit_without_the_oauth_field_is_marked(make_ctx, checker):
+    for text in (INJECTION, json.dumps({"message": INJECTION})):
         assert (await guard.injection_guard(make_ctx(text, action="mark"))).startswith("[UNTRUSTED CONTENT")
 
 
-async def test_mapping_naming_the_oauth_field_is_withheld_under_mark(make_ctx, checker):
-    for value in (
-        {"oauth_connection_required": True, "message": INJECTION},  # a dict result reaches hooks as its repr
-        {"oauth_connection_required": True, "at": date(2026, 1, 1), "message": INJECTION},  # a repr that won't parse
+async def test_any_text_naming_the_oauth_field_is_withheld_under_mark(make_ctx, checker):
+    for text in (
+        str({"oauth_connection_required": True, "message": INJECTION}),  # a dict result reaches hooks as its repr
+        str({"oauth_connection_required": True, "at": date(2026, 1, 1), "message": INJECTION}),  # won't parse
+        str(OrderedDict(oauth_connection_required=True, message=INJECTION)),  # no leading brace
+        f"Docs: a tool sets oauth_connection_required to true when it needs a login. {INJECTION}",  # errs safe
     ):
-        assert "withheld" in await guard.injection_guard(make_ctx(str(value), action="mark"))
+        assert "withheld" in await guard.injection_guard(make_ctx(text, action="mark"))
 
 
 # 5. Undecided

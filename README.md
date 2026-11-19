@@ -26,7 +26,7 @@ The model reads exactly the text the checker read, or a notice that the result w
 5. Chunks are checked one after another, one judgment per chunk. A failure stops checking; a hit stops it under `withhold`, while `mark` checks every chunk, because the model reads all of the marked text.
 6. Clean: the model reads the result unchanged when checking changed nothing; otherwise it reads the checked text, with credentials masked, tags neutralised, and, for a cut result, one line saying how many characters it had and that the rest was removed unchecked.
 7. Hit: `withhold` replaces the text with a short notice naming the tool, without any of its text; `mark` wraps the checked text between begin and end lines carrying a random per-call token, so the text cannot fake the end line.
-   A hit on an OAuth connection prompt, or on any result that starts with `{` and names `oauth_connection_required` (a dict result reaches the hook as its repr), is withheld even with `mark`, because MindRoom keeps such a control result whole when a replacement still contains it.
+   A hit on any result that contains `oauth_connection_required`, the field of an OAuth connection prompt in every form MindRoom recognizes (JSON, or the repr of a dict result), is withheld even with `mark`, because MindRoom keeps such a control result whole when a replacement still contains it; this errs toward withholding prose that merely names the field.
 8. Each check is logged through the plugin logger with the tool, agent, characters checked, chunk count, verdict (`clean`, `hit`, or `undecided`), and action; the plugin's log line never contains result text.
 
 The hook fails closed.
@@ -123,7 +123,7 @@ mindroom plugins update injection-guard-plugin
 
 The command pins the exact installed commit in `.mindroom-plugin.lock.json` and strictly validates the plugin before activating it.
 The plugin needs plugin API 1.32 (`tool:result_transform`) and is tested against MindRoom v2026.11.436 and later; an older MindRoom skips it with a clear reason.
-`mindroom plugins check` warns that it imports judgment, redaction, registry, OAuth, and MCP helpers from outside the stable plugin API; re-run the check after each MindRoom upgrade.
+`mindroom plugins check` warns that it imports judgment, redaction, registry, and MCP helpers from outside the stable plugin API; re-run the check after each MindRoom upgrade.
 
 ## Data and privacy
 
