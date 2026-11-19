@@ -105,7 +105,8 @@ def chunks(text: str) -> Iterator[JudgmentRequest | None]:
     """Requests for overlapping chunks covering ``text`` in order, each carrying its chunk verbatim; None if blank.
 
     Boundaries fall on whitespace where they can, so a cut never splits a masked credential, which the request
-    builder would refuse; a chunk whose request is too large, through escaping or multi-byte text, is halved.
+    builder would refuse; a chunk whose request is too large, through escaping or multi-byte text, shrinks by a tenth
+    until it fits, so a few escaped newlines cost a little room, not half the chunk.
     """
     start, size = 0, CHUNK_CHARS
     while start < len(text):
@@ -118,7 +119,7 @@ def chunks(text: str) -> Iterator[JudgmentRequest | None]:
             and request.incomplete_reason == "essential_input_too_large"
             and size > 2 * OVERLAP_CHARS
         ):
-            size //= 2
+            size = size * 9 // 10
             continue
         if request is not None and (
             not request.complete or json.loads(request.body)["state"]["conversation"][0]["text"] != chunk

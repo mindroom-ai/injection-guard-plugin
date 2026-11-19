@@ -419,6 +419,13 @@ async def test_multibyte_escape_heavy_text_is_covered_across_split_seams(make_ct
     _assert_ordered_cover(text, checker.texts)
 
 
+async def test_paragraph_breaks_cost_little_chunk_room(make_ctx, checker):
+    text = "\n".join(_unique(400, offset=index * 10**5) for index in range(124))  # 49,723 chars of short paragraphs
+    assert await guard.injection_guard(make_ctx(text)) is None
+    assert len(checker.texts) == 4  # escaped newlines shrink a chunk by a tenth, not by half
+    _assert_ordered_cover(text, checker.texts)
+
+
 async def test_whitespace_only_chunk_is_skipped_and_the_rest_is_checked(make_ctx, checker):
     text = " " * 30_000 + "Meeting notes: the venue is booked."
     assert await guard.injection_guard(make_ctx(text)) is None
