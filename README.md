@@ -9,73 +9,56 @@
   <img src="https://raw.githubusercontent.com/mindroom-ai/mindroom/main/assets/logo/logo-mark.svg" alt="MindRoom Logo" align="right" width="120" />
 </picture>
 
-A [MindRoom](https://github.com/mindroom-ai/mindroom) hook plugin that checks the text of successful tool results carrying outside text, such as mail, web pages, search results, shared documents, chat messages, and MCP tool output, for prompt injection before the model reads it.
-A fast checker chosen by the deployment, System One JEV by default in the examples or any small model, answers one strict question per chunk of text: does this text try to instruct an AI agent, for example to ignore its instructions, call tools, run commands, send data elsewhere, reveal secrets or its prompt, or change its task?
-The model reads exactly the text the checker read, or a notice that the result was withheld.
+A [MindRoom](https://github.com/mindroom-ai/mindroom) hook plugin that checks tool results with outside text (mail, web pages, search results, shared documents, chat, MCP tools) for prompt injection before the model reads them.
 
-## How it works
+A fast checker answers one question per chunk of text: does it try to instruct an AI agent, for example to ignore its instructions, call tools, send data elsewhere, or change its task?
 
-1. A tool call returns a successful result, and MindRoom runs the `tool:result_transform` hooks on its text.
-2. The hook skips any tool that matches none of the `tools` globs, and a whitespace-only result (cut to `max_chars` when longer), without a checker call.
-3. Credentials and token-bearing URLs are masked first by MindRoom's bounded redactor, which reads past `max_chars` to the end of a word, so a credential the cut splits is still recognized; text past what it reads is dropped.
-   The text is then cut to `max_chars`, and a conversation tag such as `<msg from="...">` becomes `<_msg from="...">`, which the judgment request builder would otherwise rewrite.
-   The removed tail is never sent to the checker.
-4. The checked text is split into chunks that each fit one judgment request (16,000 bytes with the rubric), with boundaries on whitespace where possible and 200 characters of overlap.
-   A chunk whose request grows too large through JSON escaping or multi-byte characters shrinks by a tenth until it fits, and every request is verified to carry its chunk verbatim.
-   A whitespace-only chunk is skipped without a checker call; the middle of a long result is checked as fully as its start and end.
-5. Chunks are checked one after another, one judgment per chunk. A failure stops checking; a hit stops it under `withhold`, while `mark` checks every chunk, because the model reads all of the marked text.
-6. Clean: the model reads the result unchanged when checking changed nothing; otherwise it reads the checked text, with credentials masked, tags neutralised, and, for a cut result, one line saying how many characters it had and that the rest was removed unchecked.
-7. Hit: `withhold` replaces the text with a short notice naming the tool, without any of its text; `mark` wraps the checked text between begin and end lines carrying a random per-call token, so the text cannot fake the end line.
-   A hit on any result that contains `oauth_connection_required`, the field of an OAuth connection prompt in JSON and in the repr of a dict result, is withheld even with `mark`, because MindRoom keeps such a control result whole when a replacement still contains it; this errs toward withholding prose that merely names the field.
-8. Each check is logged through the plugin logger with the tool, agent, characters checked, chunk count, verdict (`clean`, `hit`, or `undecided`), and action; the plugin's log line never contains result text.
+- **Clean:** the model reads the result unchanged.
+- **Hit:** the model reads a short notice that the result was withheld (`withhold`, the default), or the text wrapped as untrusted data (`mark`).
+- **Checker error or timeout:** MindRoom withholds the result. The hook fails closed.
 
-The hook fails closed.
-When the checker fails or times out, has no backend (such as a missing credential), the redactor fails, a chunk cannot be sent verbatim or still cannot fit after splitting, or the settings are invalid, the hook raises, and MindRoom withholds the result: the model reads `The result of <tool> was withheld because a result check failed.`
-A checker that answers undecided counts as no hit and is logged as `undecided`.
-There is no retry.
+## Quick start
 
-There is no keyword pre-filter: patterns can only add hits and never clear text without the model, since they miss paraphrases, so they would save no checker calls on clean text.
+```bash
+mindroom plugins install injection-guard-plugin
+```
 
-## Hooks
+```yaml
+plugins:
+  - path: plugins/injection-guard-plugin
+    required: true  # refuse to start with the guard skipped
+    settings:
+      judgment:
+        provider: typesafe  # System One JEV; needs TYPESAFE_API_KEY
+        threshold: 0.5
+        timeout_seconds: 5
+```
 
-| Hook | Event | Purpose |
-|------|-------|---------|
-| `injection_guard` | `tool:result_transform` | Check matching tool results for instructions aimed at an AI agent; withhold or mark hits |
+Update later with `mindroom plugins update injection-guard-plugin`.
+Needs MindRoom v2026.11.436 or later (plugin API 1.32).
 
 ## Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `judgment` | required | A MindRoom [judgment backend](https://docs.mindroom.chat/configuration/threads/#judgment-backends): `typesafe` (System One JEV, recommended), `llm` (a model alias from `models:`), or `openai_decisions`. Required, so the deployment chooses and pays for the checker. See [Choosing a checker](#choosing-a-checker). |
-| `tools` | see below | `fnmatch` globs; a call matches when one matches its function name or its toolkit name. |
-| `max_chars` | `50000` | Characters of a result that are checked and kept; at most `60000`, the plugin's cap, which with the redactor's lookahead stays under the 65,536 characters MindRoom's redactor reads. |
+| `judgment` | required | A MindRoom [judgment backend](https://docs.mindroom.chat/configuration/threads/#judgment-backends): `typesafe` (JEV, recommended), `llm` (a model alias from `models:`), or `openai_decisions`. |
+| `tools` | mail, calendar, web, docs, chat, `mcp_*` | `fnmatch` globs over function or toolkit names. Setting it replaces the whole list. |
+| `max_chars` | `50000` | Characters checked and kept; the rest is cut and never reaches the model. At most `60000`. |
 | `action` | `withhold` | `withhold` replaces a hit with a notice; `mark` wraps it as untrusted data. |
 
-```yaml
-plugins:
-  - path: plugins/injection-guard-plugin
-    required: true  # refuse to start, or reload, with the guard skipped
-    settings:
-      judgment:
-        provider: typesafe  # System One JEV; set TYPESAFE_API_KEY in the environment or .env
-        threshold: 0.5      # a hit is a probability at or above this
-        timeout_seconds: 5
-      action: withhold
-      # tools: ["gmail", "website", "mcp_*", "my_fetch_*"]
-```
-
-### Choosing a checker
+<details>
+<summary><b>Choosing a checker</b></summary>
 
 | Checker | `judgment` | Per chunk | 50,000 characters |
 |---------|------------|-----------|-------------------|
-| **System One JEV** (recommended) | `{provider: typesafe, threshold: 0.5, timeout_seconds: 5}` | about 90 ms | about 0.4 s, fits the 30 s hook timeout easily |
-| A small LLM, such as GPT-6 Luna | `{provider: llm, model: checker, timeout_seconds: 10}` | about 1.5 s | 6 to 8 s; raise `timeout_ms` (below) |
+| **System One JEV** (recommended) | `{provider: typesafe, threshold: 0.5, timeout_seconds: 5}` | about 90 ms | about 0.4 s |
+| A small LLM, such as GPT-6 Luna | `{provider: llm, model: checker, timeout_seconds: 10}` | about 1.5 s | 6 to 8 s, about $0.0015 |
 
-JEV answers with a probability; a chunk is a hit when it is at or above `threshold`.
-The judgment default of `0.8` lets a chunk scored just below it through, so a guard should set a lower one: `0.5` is a good start.
+JEV answers with a probability, and a chunk is a hit at or above `threshold`.
+The judgment default of `0.8` lets a chunk scored just below it through, so set `0.5` for a guard.
 On test texts JEV scored clean notes, a newsletter, and an article about prompt injection 0.04 to 0.10, and an injected page 0.98.
 
-With an LLM checker, define its model and give long results more time:
+An LLM checker needs a model entry and, for long results, a longer hook timeout (default 30 s), since chunks are checked one after another:
 
 ```yaml
 models:
@@ -89,79 +72,71 @@ plugins:
       judgment: {provider: llm, model: checker, timeout_seconds: 10}
     hooks:
       injection_guard:
-        timeout_ms: 60000  # covers a 50,000-character result at up to 10 s per chunk
+        timeout_ms: 60000
 ```
 
-Default `tools`, the built-in toolkits whose results carry outside text:
+With GPT-6 Luna a short result costs about $0.00006 (400 to 500 input and 40 output tokens); Claude Haiku 5.5 cost about $0.0023 for 50,000 characters.
+
+</details>
+
+<details>
+<summary><b>Default tools</b></summary>
 
 - mail and calendar: `gmail`, `outlook_mail`, `google_calendar`, `outlook_calendar`
 - web fetch, scrape, and search: `website`, `browser`, `browser_mcp`, `web_browser_tools`, `browserbase`, `crawl4ai`, `firecrawl`, `jina`, `newspaper`, `trafilatura`, `spider`, `scrapegraph`, `agentql`, `brightdata`, `oxylabs`, `serper`, `serpapi`, `searxng`, `tavily`, `exa`, `linkup`, `duckduckgo`, `googlesearch`, `baidusearch`, `wikipedia`, `arxiv`, `pubmed`, `google_scholar`, `hackernews`, `reddit`, `youtube`, `x`
 - shared documents: `google_drive`, `google_docs`, `google_sheets`, `notion`, `confluence`, `microsoft_files`, `microsoft_sharepoint`, `microsoft_onenote`
-- chat networks the agent reads: `slack`, `discord`, `microsoft_teams`
+- chat networks: `slack`, `discord`, `microsoft_teams`
 - every enabled MCP server: `mcp_*`
 
-Opt-in candidates, left out of the defaults:
+Left out, add them where they fit:
 
-- `matrix_message`: thread messages reach the model without any tool, so checking only this tool's reads protects nothing consistently.
-- `github`: issues and pull requests carry outside text, but agents read code and diffs there constantly; add it where untrusted contributors write.
-- `custom_api`: a generic HTTP client whose results are whatever the configured API returns; add it when that API serves outside text.
-- `telegram`, `webex`: bot APIs that mostly send; their few reads (`get_chat`, `list_rooms`) return chat metadata.
+- `matrix_message`: thread messages reach the model without any tool, so checking this tool alone protects nothing consistently.
+- `github`: add it where untrusted contributors write issues and pull requests.
+- `custom_api`: add it when the configured API serves outside text.
+- `telegram`, `webex`: they mostly send; their reads return chat metadata.
 
-Setting `tools` replaces the whole list.
 Function-name globs are exact.
-Toolkit matching is an approximation that errs toward checking more: the result context carries only the function name, so a function matches every configured toolkit (built-in or plugin) that declares that name, such as `send_message` for Discord, Telegram, and Webex.
-An MCP function, named `<prefix>_<remote tool>`, belongs to the toolkit `mcp_<server id>` of each enabled server in `mcp_servers` whose `tool_prefix` (by default the server id) it starts with.
+A toolkit glob errs toward checking more: the hook sees only the function name, so it matches every toolkit that declares that name.
+An MCP function belongs to `mcp_<server id>` of each enabled server whose tool prefix it starts with.
 
-Chunks are checked one after another, so a long result takes several checker round trips: a 50,000-character result of prose is about four chunks, and text with many multi-byte characters or escapes needs more.
-The hook's timeout covers all of a result's chunks, and the default is 30 seconds; a fast checker answers a chunk in 1 to 2 seconds.
-When chunks times the judgment `timeout_seconds` can exceed the hook timeout, as with a slow LLM checker, raise `timeout_ms` under the plugin entry's `hooks:`, as in the LLM example above; a hook that times out withholds the result.
-Checks share MindRoom's judgment capacity (8 requests at once across the process, one per call here), which refuses rather than queues, so a burst of guarded calls can fail checks and withhold results.
+</details>
 
-## Install
+<details>
+<summary><b>How it works</b></summary>
 
-Vendor this plugin with the MindRoom CLI:
+1. The hook skips tools that match no `tools` glob and blank results, without a checker call.
+2. MindRoom's redactor masks credentials, reading past `max_chars` so a credential the cut splits is still caught. Then the text is cut to `max_chars`, and `<msg` becomes `<_msg`, which the judgment request builder would otherwise rewrite.
+3. The text is split into chunks of one judgment request (16,000 bytes), on whitespace where possible, with 200 characters of overlap. Every request is verified to carry its chunk verbatim. The middle of a long result is checked as fully as its start and end; checking only the head and tail would let an attacker hide an instruction in the middle.
+4. Chunks are checked one after another. A failure stops checking. A hit stops it under `withhold`; `mark` checks every chunk, because the model reads all of the marked text.
+5. The model reads exactly the text the checker read: unchanged when checking changed nothing, otherwise with credentials masked, tags neutralised, and a line saying how much was cut.
+6. `mark` wraps the text between begin and end lines with a random per-call token, so the text cannot fake the end line. A hit on text containing `oauth_connection_required` is withheld even under `mark`, because MindRoom keeps an OAuth prompt whole.
+7. Each check is logged with the tool, agent, characters, chunk count, verdict (`clean`, `hit`, `undecided`), and action, never with result text.
 
-```bash
-mindroom plugins install injection-guard-plugin
-```
+The hook raises, and MindRoom withholds the result with `The result of <tool> was withheld because a result check failed.`, when the checker fails or times out, has no backend (such as a missing key), the redactor fails, or a chunk cannot be sent verbatim.
+An undecided checker counts as no hit. There is no retry.
+There is no keyword pre-filter: patterns can only add hits, never clear text, so they save no checker calls.
+Checks share MindRoom's judgment capacity (8 at once, one per guarded call), so a burst of guarded calls can fail checks and withhold results.
 
-Then reference it from `config.yaml` with its settings, as in the example above:
+</details>
 
-```yaml
-plugins:
-  - path: plugins/injection-guard-plugin
-    required: true
-    settings:
-      judgment: {provider: typesafe, threshold: 0.5, timeout_seconds: 5}
-```
+<details>
+<summary><b>Data, privacy, and limits</b></summary>
 
-Update to the latest commit later with:
+- Matched text, with credentials masked, goes to the checker provider, once per chunk.
+- With `debug.log_llm_requests: true` (off by default), MindRoom logs the checker's requests to disk, including text from withheld results.
+- Secrets in guarded results reach the model masked.
+- Only successful result text is checked: failed tool outcomes, including an MCP server's `isError` text, never reach the hook.
+- Withholding replaces the text only; attached images, audio, video, and files still reach the model unchecked.
+- Streamed progress and a delegated agent's answer are not checked; the delegated agent's own tool calls are.
+- Under `mark`, MindRoom keeps whole a result that stops the run (such as a model switch) and an OAuth prompt returned as a custom mapping whose text lacks the lowercase `oauth_connection_required` key; use `withhold` where such tools are guarded.
+- A checker can miss an attack or flag benign text; `mark` keeps flagged text readable.
+- The overlap helps with an instruction cut at a chunk boundary; it does not guarantee a long instruction is seen whole.
+- `mindroom plugins check` warns that the plugin imports MindRoom helpers outside the stable plugin API; re-run it after each upgrade.
 
-```bash
-mindroom plugins update injection-guard-plugin
-```
+</details>
 
-The command pins the exact installed commit in `.mindroom-plugin.lock.json` and strictly validates the plugin before activating it.
-The plugin needs plugin API 1.32 (`tool:result_transform`) and is tested against MindRoom v2026.11.436 and later; an older MindRoom skips it with a clear reason.
-`mindroom plugins check` warns that it imports judgment, redaction, registry, and MCP helpers from outside the stable plugin API; re-run the check after each MindRoom upgrade.
+## Hooks
 
-## Data and privacy
-
-- Matched result text, after credential masking, is sent to the configured checker provider, once per chunk.
-- With `debug.log_llm_requests: true` (off by default), MindRoom logs the checker's request bodies to disk like any other model request, including text from results that were then withheld.
-- Secrets in guarded results reach the model masked, as the checker read them.
-
-## Limits
-
-- Successful result text only: failed tool outcomes, including the text of an MCP server's `isError` result, never reach this hook.
-- Withholding replaces the text only; images, audio, video, and files attached to the result still reach the model unchecked.
-- Progress a tool streams while it runs is not checked.
-- A delegated agent's answer to the agent that delegated to it is not checked; the delegated agent's own tool calls are.
-- A result that stops the run after the call, such as an immediate model switch, cannot be told apart by the hook, and MindRoom keeps it whole under `mark`; these come from control tools, not the outside-text readers guarded here.
-  Likewise, an OAuth prompt returned as a custom mapping whose text does not show the lowercase `oauth_connection_required` key is kept whole under `mark`; use `withhold` where such tools are guarded.
-- A checker can miss an attack or flag benign text, such as an article about prompt injection; `mark` keeps flagged text readable when false hits matter more than a stricter `withhold`.
-- The 200-character overlap helps with an instruction cut at a chunk boundary; it does not guarantee that a long instruction is seen whole in one chunk.
-- A result longer than `max_chars` is cut, and the model never reads the removed part.
-- A checker error or timeout withholds the result.
-- Latency with JEV: about 90 ms per chunk (560 input tokens for a short result, up to 3,500 for a full chunk), 0.4 seconds for 50,000 characters.
-- Cost and latency, measured with GPT-6 Luna as the checker ($0.10 per million input and $0.50 per million output tokens): a short result is one chunk of about 400 to 500 input and 40 output tokens, about $0.00006 and 1.5 seconds; a 50,000-character result is about $0.0015 and 6 to 8 seconds. Claude Haiku 5.5 cost about $0.0023 for the same 50,000 characters.
+| Hook | Event | Purpose |
+|------|-------|---------|
+| `injection_guard` | `tool:result_transform` | Check matching tool results for instructions aimed at an AI agent; withhold or mark hits |
