@@ -16,17 +16,17 @@ The model reads exactly the text the checker read, or a notice that the result w
 ## How it works
 
 1. A tool call returns a successful result, and MindRoom runs the `tool:result_transform` hooks on its text.
-2. The hook skips an empty result and any tool that matches none of the `tools` globs, without a checker call.
-3. Credentials and token-bearing URLs are masked first, reading 4,000 characters past `max_chars` so a credential the cut splits is still recognized.
+2. The hook skips any tool that matches none of the `tools` globs, and a whitespace-only result (cut to `max_chars` when longer), without a checker call.
+3. Credentials and token-bearing URLs are masked first by MindRoom's bounded redactor, which reads past `max_chars` to the end of a word, so a credential the cut splits is still recognized; text past what it reads is dropped.
    The text is then cut to `max_chars`, and a conversation tag such as `<msg from="...">` becomes `<_msg from="...">`, which the judgment request builder would otherwise rewrite.
    The removed tail is never sent to the checker.
 4. The checked text is split into chunks that each fit one judgment request (16,000 bytes with the rubric), with boundaries on whitespace where possible and 200 characters of overlap.
    A chunk whose request grows too large through JSON escaping or multi-byte characters is halved again, and every request is verified to carry its chunk verbatim.
    A whitespace-only chunk is skipped without a checker call; the middle of a long result is checked as fully as its start and end.
-5. Chunks are checked one after another, one judgment per chunk, and checking stops at the first hit or failure.
+5. Chunks are checked one after another, one judgment per chunk. A failure stops checking; a hit stops it under `withhold`, while `mark` checks every chunk, because the model reads all of the marked text.
 6. Clean: the model reads the result unchanged when checking changed nothing; otherwise it reads the checked text, with credentials masked, tags neutralised, and, for a cut result, one line saying how many characters it had and that the rest was removed unchecked.
 7. Hit: `withhold` replaces the text with a short notice naming the tool, without any of its text; `mark` wraps the checked text between begin and end lines carrying a random per-call token, so the text cannot fake the end line.
-   A hit on an OAuth connection prompt (or any text naming `oauth_connection_required`) is withheld even with `mark`, because MindRoom keeps such a control result whole when a replacement still contains it.
+   A hit on an OAuth connection prompt, as JSON or as the repr of a dict result, is withheld even with `mark`, because MindRoom keeps such a control result whole when a replacement still contains it.
 8. Each check is logged through the plugin logger with the tool, agent, characters checked, chunk count, verdict (`clean`, `hit`, or `undecided`), and action; the plugin's log line never contains result text.
 
 The hook fails closed.
@@ -48,7 +48,7 @@ There is no keyword pre-filter: patterns can only add hits and never clear text 
 |---------|---------|-------------|
 | `judgment` | required | A MindRoom [judgment backend](https://docs.mindroom.chat/configuration/threads/#judgment-backends), such as `{provider: llm, model: <alias from models:>, timeout_seconds: 20}`. Required, so the deployment chooses and pays for the checker model. |
 | `tools` | see below | `fnmatch` globs; a call matches when one matches its function name or its toolkit name. |
-| `max_chars` | `50000` | Characters of a result that are checked and kept; at most `60000`, the plugin's cap, which with the 4,000-character redaction margin stays under the 65,536 characters MindRoom's redactor reads. |
+| `max_chars` | `50000` | Characters of a result that are checked and kept; at most `60000`, the plugin's cap, which with the redactor's lookahead stays under the 65,536 characters MindRoom's redactor reads. |
 | `action` | `withhold` | `withhold` replaces a hit with a notice; `mark` wraps it as untrusted data. |
 
 ```yaml
