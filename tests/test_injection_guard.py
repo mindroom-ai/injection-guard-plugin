@@ -50,8 +50,10 @@ def _result(decision: bool | None, failure: str | None = None) -> JudgmentResult
 class FakeChecker:
     """Stands in for the judgment backend: records each request and flags texts containing INJECTION."""
 
-    def __init__(self, decision: bool | None = None, failure: str | None = None, missing: bool = False) -> None:
-        self.decision, self.failure, self.missing = decision, failure, missing
+    def __init__(
+        self, decision: bool | None = None, failure: str | None = None, missing: bool = False, undecided: bool = False
+    ) -> None:
+        self.decision, self.failure, self.missing, self.undecided = decision, failure, missing, undecided
         self.requests = []
         self.owners = []
 
@@ -64,6 +66,8 @@ class FakeChecker:
             self.requests.append(request)
             if self.failure is not None:
                 return _result(None, self.failure)
+            if self.undecided:
+                return _result(None)
             if self.decision is not None:
                 return _result(self.decision)
             return _result(INJECTION in self.texts[-1])
@@ -221,9 +225,7 @@ async def test_checker_failure_raises_without_result_text(make_ctx, monkeypatch,
 
 @pytest.fixture
 def plugin(tmp_path):
-    config = {
-        "agents": {"helper": {"display_name": "Helper", "tools": ["calculator"], "access": {"users": [ALICE]}}}
-    }
+    config = {"agents": {"helper": {"display_name": "Helper", "tools": ["calculator"], "access": {"users": [ALICE]}}}}
     settings = {"judgment": JUDGMENT, "tools": ["calculator"]}
     with load_plugin(ROOT, tmp_path, config=config, settings=settings) as loaded:
         loaded.add_room(ROOM, members={ALICE: "Alice"})
@@ -233,26 +235,23 @@ def plugin(tmp_path):
 async def test_end_to_end_raising_checker_withholds_result(plugin, monkeypatch):
     monkeypatch.setattr(evaluator, "create_judgment_evaluator", FakeChecker(failure="timeout").factory)
     result = await plugin.call_tool("calculator", "add", {"a": 2, "b": 3}, agent="helper", sender=ALICE, room=ROOM)
-    assert result.status != "ok" or "withheld" in str(result.value)
     assert "The result of add was withheld because a result check failed." in f"{result.value}{result.failure_text}"
+    assert result.status == "failed" and "5" not in f"{result.value}{result.failure_text}"
 
 
 async def test_end_to_end_clean_checker_keeps_result(plugin, monkeypatch):
-    monkeypatch.setattr(evaluator, "create_judgment_evaluator", FakeChecker(decision=None).factory)
-    unguarded = await plugin.call_tool("calculator", "multiply", {"a": 2, "b": 3}, agent="helper", sender=ALICE, room=ROOM)
     fake = FakeChecker(decision=False)
     monkeypatch.setattr(evaluator, "create_judgment_evaluator", fake.factory)
     result = await plugin.call_tool("calculator", "add", {"a": 2, "b": 3}, agent="helper", sender=ALICE, room=ROOM)
-    assert result.status == "ok" and unguarded.status == "ok"
-    assert fake.texts == [str(result.value)]
-    assert "5" in str(result.value)
+    # The checker read the call's own text, and the model reads that same text.
+    assert result.status == "ok" and fake.texts == [str(result.value)] and "5" in fake.texts[0]
 
 
 # 5. Undecided
 
 
 async def test_undecided_checker_is_not_a_hit(make_ctx, monkeypatch):
-    monkeypatch.setattr(evaluator, "create_judgment_evaluator", FakeChecker(decision=None).factory)
+    monkeypatch.setattr(evaluator, "create_judgment_evaluator", FakeChecker(undecided=True).factory)
     ctx = make_ctx(INJECTION)
     assert await guard.injection_guard(ctx) is None
     assert _logged(ctx)["verdict"] == "undecided"
