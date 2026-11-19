@@ -52,7 +52,7 @@ There is no keyword pre-filter: patterns can only add hits and never clear text 
 models:
   checker:
     provider: openai
-    id: gpt-5-nano
+    id: your-small-fast-model
 
 plugins:
   - path: plugins/injection-guard-plugin
@@ -63,11 +63,9 @@ plugins:
         timeout_seconds: 20
       action: withhold
       # tools: ["gmail", "website", "mcp_*", "my_fetch_*"]
-
-hooks:
-  injection-guard:
-    injection_guard:
-      timeout_ms: 60000  # only for a checker slower than about 20 seconds per call
+    hooks:
+      injection_guard:
+        timeout_ms: 60000  # only for a slower checker or many-chunk results
 ```
 
 Default `tools`, the built-in toolkits whose results carry outside text:
@@ -83,7 +81,7 @@ An MCP function, named `<prefix>_<remote tool>`, belongs to the toolkit `mcp_<se
 A plugin's own toolkit names are not known to the hook, so match a plugin's tools by their function names.
 
 The default hook timeout is 30 seconds.
-A 50,000-character result of plain text is about four chunks checked in parallel, which fits with `timeout_seconds: 20`; text with many multi-byte characters or escapes needs more chunks and runs four at a time, so raise `timeout_ms` under `hooks:` as above for such results or for a slower checker.
+A 50,000-character result of plain text is about four chunks checked in parallel, which fits with `timeout_seconds: 20`; text with many multi-byte characters or escapes needs more chunks and runs four at a time, so raise `timeout_ms` under the plugin entry's `hooks:` as above for such results or for a slower checker.
 
 ## Install
 
