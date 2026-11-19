@@ -10,7 +10,7 @@
 </picture>
 
 A [MindRoom](https://github.com/mindroom-ai/mindroom) hook plugin that checks the text of successful tool results carrying outside text, such as mail, web pages, search results, shared documents, chat messages, and MCP tool output, for prompt injection before the model reads it.
-A cheap checker model, chosen by the deployment, answers one strict question per chunk of text: does this text try to instruct an AI agent, for example to ignore its instructions, call tools, run commands, send data elsewhere, reveal secrets or its prompt, or change its task?
+A fast checker chosen by the deployment, System One JEV by default in the examples or any small model, answers one strict question per chunk of text: does this text try to instruct an AI agent, for example to ignore its instructions, call tools, run commands, send data elsewhere, reveal secrets or its prompt, or change its task?
 The model reads exactly the text the checker read, or a notice that the result was withheld.
 
 ## How it works
@@ -46,10 +46,36 @@ There is no keyword pre-filter: patterns can only add hits and never clear text 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `judgment` | required | A MindRoom [judgment backend](https://docs.mindroom.chat/configuration/threads/#judgment-backends), such as `{provider: llm, model: <alias from models:>, timeout_seconds: 10}`. Required, so the deployment chooses and pays for the checker model. |
+| `judgment` | required | A MindRoom [judgment backend](https://docs.mindroom.chat/configuration/threads/#judgment-backends): `typesafe` (System One JEV, recommended), `llm` (a model alias from `models:`), or `openai_decisions`. Required, so the deployment chooses and pays for the checker. See [Choosing a checker](#choosing-a-checker). |
 | `tools` | see below | `fnmatch` globs; a call matches when one matches its function name or its toolkit name. |
 | `max_chars` | `50000` | Characters of a result that are checked and kept; at most `60000`, the plugin's cap, which with the redactor's lookahead stays under the 65,536 characters MindRoom's redactor reads. |
 | `action` | `withhold` | `withhold` replaces a hit with a notice; `mark` wraps it as untrusted data. |
+
+```yaml
+plugins:
+  - path: plugins/injection-guard-plugin
+    required: true  # refuse to start, or reload, with the guard skipped
+    settings:
+      judgment:
+        provider: typesafe  # System One JEV; set TYPESAFE_API_KEY in the environment or .env
+        threshold: 0.5      # a hit is a probability at or above this
+        timeout_seconds: 5
+      action: withhold
+      # tools: ["gmail", "website", "mcp_*", "my_fetch_*"]
+```
+
+### Choosing a checker
+
+| Checker | `judgment` | Per chunk | 50,000 characters |
+|---------|------------|-----------|-------------------|
+| **System One JEV** (recommended) | `{provider: typesafe, threshold: 0.5, timeout_seconds: 5}` | about 90 ms | about 0.4 s, fits the 30 s hook timeout easily |
+| A small LLM, such as GPT-6 Luna | `{provider: llm, model: checker, timeout_seconds: 10}` | about 1.5 s | 6 to 8 s; raise `timeout_ms` (below) |
+
+JEV answers with a probability; a chunk is a hit when it is at or above `threshold`.
+The judgment default of `0.8` lets a chunk scored just below it through, so a guard should set a lower one: `0.5` is a good start.
+On test texts JEV scored clean notes, a newsletter, and an article about prompt injection 0.04 to 0.10, and an injected page 0.98.
+
+With an LLM checker, define its model and give long results more time:
 
 ```yaml
 models:
@@ -59,14 +85,8 @@ models:
 
 plugins:
   - path: plugins/injection-guard-plugin
-    required: true  # refuse to start, or reload, with the guard skipped
     settings:
-      judgment:
-        provider: llm
-        model: checker
-        timeout_seconds: 10
-      action: withhold
-      # tools: ["gmail", "website", "mcp_*", "my_fetch_*"]
+      judgment: {provider: llm, model: checker, timeout_seconds: 10}
     hooks:
       injection_guard:
         timeout_ms: 60000  # covers a 50,000-character result at up to 10 s per chunk
@@ -94,7 +114,7 @@ An MCP function, named `<prefix>_<remote tool>`, belongs to the toolkit `mcp_<se
 
 Chunks are checked one after another, so a long result takes several checker round trips: a 50,000-character result of prose is about four chunks, and text with many multi-byte characters or escapes needs more.
 The hook's timeout covers all of a result's chunks, and the default is 30 seconds; a fast checker answers a chunk in 1 to 2 seconds.
-When chunks times the judgment `timeout_seconds` can exceed the hook timeout, raise `timeout_ms` under the plugin entry's `hooks:`, as above; a hook that times out withholds the result.
+When chunks times the judgment `timeout_seconds` can exceed the hook timeout, as with a slow LLM checker, raise `timeout_ms` under the plugin entry's `hooks:`, as in the LLM example above; a hook that times out withholds the result.
 Checks share MindRoom's judgment capacity (8 requests at once across the process, one per call here), which refuses rather than queues, so a burst of guarded calls can fail checks and withhold results.
 
 ## Install
@@ -112,7 +132,7 @@ plugins:
   - path: plugins/injection-guard-plugin
     required: true
     settings:
-      judgment: {provider: llm, model: checker, timeout_seconds: 10}
+      judgment: {provider: typesafe, threshold: 0.5, timeout_seconds: 5}
 ```
 
 Update to the latest commit later with:
@@ -143,4 +163,5 @@ The plugin needs plugin API 1.32 (`tool:result_transform`) and is tested against
 - The 200-character overlap helps with an instruction cut at a chunk boundary; it does not guarantee that a long instruction is seen whole in one chunk.
 - A result longer than `max_chars` is cut, and the model never reads the removed part.
 - A checker error or timeout withholds the result.
+- Latency with JEV: about 90 ms per chunk (560 input tokens for a short result, up to 3,500 for a full chunk), 0.4 seconds for 50,000 characters.
 - Cost and latency, measured with GPT-6 Luna as the checker ($0.10 per million input and $0.50 per million output tokens): a short result is one chunk of about 400 to 500 input and 40 output tokens, about $0.00006 and 1.5 seconds; a 50,000-character result is about $0.0015 and 6 to 8 seconds. Claude Haiku 5.5 cost about $0.0023 for the same 50,000 characters.
