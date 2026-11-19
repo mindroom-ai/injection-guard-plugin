@@ -21,7 +21,7 @@ The model reads exactly the text the checker read, or a notice that the result w
    The text is then cut to `max_chars`, and a conversation tag such as `<msg from="...">` becomes `<_msg from="...">`, which the judgment request builder would otherwise rewrite.
    The removed tail is never sent to the checker.
 4. The checked text is split into chunks that each fit one judgment request (16,000 bytes with the rubric), with boundaries on whitespace where possible and 200 characters of overlap.
-   A chunk whose request grows too large through JSON escaping or multi-byte characters is halved again, and every request is verified to carry its chunk verbatim.
+   A chunk whose request grows too large through JSON escaping or multi-byte characters shrinks by a tenth until it fits, and every request is verified to carry its chunk verbatim.
    A whitespace-only chunk is skipped without a checker call; the middle of a long result is checked as fully as its start and end.
 5. Chunks are checked one after another, one judgment per chunk. A failure stops checking; a hit stops it under `withhold`, while `mark` checks every chunk, because the model reads all of the marked text.
 6. Clean: the model reads the result unchanged when checking changed nothing; otherwise it reads the checked text, with credentials masked, tags neutralised, and, for a cut result, one line saying how many characters it had and that the rest was removed unchecked.
@@ -46,7 +46,7 @@ There is no keyword pre-filter: patterns can only add hits and never clear text 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `judgment` | required | A MindRoom [judgment backend](https://docs.mindroom.chat/configuration/threads/#judgment-backends), such as `{provider: llm, model: <alias from models:>, timeout_seconds: 20}`. Required, so the deployment chooses and pays for the checker model. |
+| `judgment` | required | A MindRoom [judgment backend](https://docs.mindroom.chat/configuration/threads/#judgment-backends), such as `{provider: llm, model: <alias from models:>, timeout_seconds: 10}`. Required, so the deployment chooses and pays for the checker model. |
 | `tools` | see below | `fnmatch` globs; a call matches when one matches its function name or its toolkit name. |
 | `max_chars` | `50000` | Characters of a result that are checked and kept; at most `60000`, the plugin's cap, which with the redactor's lookahead stays under the 65,536 characters MindRoom's redactor reads. |
 | `action` | `withhold` | `withhold` replaces a hit with a notice; `mark` wraps it as untrusted data. |
@@ -64,12 +64,12 @@ plugins:
       judgment:
         provider: llm
         model: checker
-        timeout_seconds: 20
+        timeout_seconds: 10
       action: withhold
       # tools: ["gmail", "website", "mcp_*", "my_fetch_*"]
     hooks:
       injection_guard:
-        timeout_ms: 90000  # for long results or a slow checker
+        timeout_ms: 60000  # covers a 50,000-character result at up to 10 s per chunk
 ```
 
 Default `tools`, the built-in toolkits whose results carry outside text:
@@ -92,8 +92,9 @@ Function-name globs are exact.
 Toolkit matching is an approximation that errs toward checking more: the result context carries only the function name, so a function matches every configured toolkit (built-in or plugin) that declares that name, such as `send_message` for Discord, Telegram, and Webex.
 An MCP function, named `<prefix>_<remote tool>`, belongs to the toolkit `mcp_<server id>` of each enabled server in `mcp_servers` whose `tool_prefix` (by default the server id) it starts with.
 
-Chunks are checked one after another, so a long result takes several checker round trips: a 50,000-character result of plain text is about four chunks, and text with many multi-byte characters or escapes needs more.
-The default hook timeout is 30 seconds; raise `timeout_ms` under the plugin entry's `hooks:`, as above, for long results or a slow checker.
+Chunks are checked one after another, so a long result takes several checker round trips: a 50,000-character result of prose is about four chunks, and text with many multi-byte characters or escapes needs more.
+The hook's timeout covers all of a result's chunks, and the default is 30 seconds; a fast checker answers a chunk in 1 to 2 seconds.
+When chunks times the judgment `timeout_seconds` can exceed the hook timeout, raise `timeout_ms` under the plugin entry's `hooks:`, as above; a hook that times out withholds the result.
 Checks share MindRoom's judgment capacity (8 requests at once across the process, one per call here), which refuses rather than queues, so a burst of guarded calls can fail checks and withhold results.
 
 ## Install
@@ -111,7 +112,7 @@ plugins:
   - path: plugins/injection-guard-plugin
     required: true
     settings:
-      judgment: {provider: llm, model: checker, timeout_seconds: 20}
+      judgment: {provider: llm, model: checker, timeout_seconds: 10}
 ```
 
 Update to the latest commit later with:
@@ -141,4 +142,4 @@ The plugin needs plugin API 1.32 (`tool:result_transform`) and is tested against
 - The 200-character overlap helps with an instruction cut at a chunk boundary; it does not guarantee that a long instruction is seen whole in one chunk.
 - A result longer than `max_chars` is cut, and the model never reads the removed part.
 - A checker error or timeout withholds the result.
-- TODO-COST
+- Cost and latency, measured with GPT-6 Luna as the checker ($0.10 per million input and $0.50 per million output tokens): a short result is one chunk of about 400 to 500 input and 40 output tokens, about $0.00006 and 1.5 seconds; a 50,000-character result is about $0.0015 and 6 to 8 seconds. Claude Haiku 5.5 cost about $0.0023 for the same 50,000 characters.
