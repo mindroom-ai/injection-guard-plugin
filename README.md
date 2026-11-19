@@ -26,7 +26,7 @@ The model reads exactly the text the checker read, or a notice that the result w
 5. Chunks are checked one after another, one judgment per chunk. A failure stops checking; a hit stops it under `withhold`, while `mark` checks every chunk, because the model reads all of the marked text.
 6. Clean: the model reads the result unchanged when checking changed nothing; otherwise it reads the checked text, with credentials masked, tags neutralised, and, for a cut result, one line saying how many characters it had and that the rest was removed unchecked.
 7. Hit: `withhold` replaces the text with a short notice naming the tool, without any of its text; `mark` wraps the checked text between begin and end lines carrying a random per-call token, so the text cannot fake the end line.
-   A hit on any result that contains `oauth_connection_required`, the field of an OAuth connection prompt in every form MindRoom recognizes (JSON, or the repr of a dict result), is withheld even with `mark`, because MindRoom keeps such a control result whole when a replacement still contains it; this errs toward withholding prose that merely names the field.
+   A hit on any result that contains `oauth_connection_required`, the field of an OAuth connection prompt in JSON and in the repr of a dict result, is withheld even with `mark`, because MindRoom keeps such a control result whole when a replacement still contains it; this errs toward withholding prose that merely names the field.
 8. Each check is logged through the plugin logger with the tool, agent, characters checked, chunk count, verdict (`clean`, `hit`, or `undecided`), and action; the plugin's log line never contains result text.
 
 The hook fails closed.
@@ -138,6 +138,7 @@ The plugin needs plugin API 1.32 (`tool:result_transform`) and is tested against
 - Progress a tool streams while it runs is not checked.
 - A delegated agent's answer to the agent that delegated to it is not checked; the delegated agent's own tool calls are.
 - A result that stops the run after the call, such as an immediate model switch, cannot be told apart by the hook, and MindRoom keeps it whole under `mark`; these come from control tools, not the outside-text readers guarded here.
+  Likewise, an OAuth prompt returned as a custom mapping whose text does not show the lowercase `oauth_connection_required` key is kept whole under `mark`; use `withhold` where such tools are guarded.
 - A checker can miss an attack or flag benign text, such as an article about prompt injection; `mark` keeps flagged text readable when false hits matter more than a stricter `withhold`.
 - The 200-character overlap helps with an instruction cut at a chunk boundary; it does not guarantee that a long instruction is seen whole in one chunk.
 - A result longer than `max_chars` is cut, and the model never reads the removed part.
