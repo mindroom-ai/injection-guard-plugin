@@ -10,7 +10,13 @@ from uuid import uuid4
 
 from mindroom.config.judgment import JudgmentConfig
 from mindroom.judgment import evaluator
-from mindroom.judgment.state import JudgmentMessage, JudgmentQuestion, JudgmentRequest, build_judgment_request
+from mindroom.judgment.state import (
+    MAX_REQUEST_BYTES,
+    JudgmentMessage,
+    JudgmentQuestion,
+    JudgmentRequest,
+    build_judgment_request,
+)
 from mindroom.mcp.config import resolved_mcp_tool_prefix
 from mindroom.mcp.registry import mcp_tool_name
 from mindroom.plugin_api import ToolResultTransformContext, hook
@@ -84,7 +90,7 @@ def _fits(text: str) -> list[JudgmentRequest]:
 
 
 # The rubric's share of every request, so a chunk of plain text fills the rest.
-CHUNK_CHARS = 16_000 - len(_request("x").body or b"") + 1
+CHUNK_CHARS = MAX_REQUEST_BYTES - len(_request("x").body or b"") + 1
 
 
 def chunk_requests(text: str) -> list[JudgmentRequest]:
