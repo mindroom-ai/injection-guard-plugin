@@ -324,7 +324,9 @@ async def test_chunks_stop_at_the_first_hit_and_share_one_owner_per_call(make_ct
 @pytest.fixture
 def plugin(tmp_path):
     config = {
-        "agents": {"helper": {"display_name": "Helper", "tools": ["calculator", "file"], "access": {"users": [ALICE]}}}
+        "agents": {
+            "helper": {"display_name": "Helper", "tools": ["calculator", "coding"], "access": {"users": [ALICE]}}
+        }
     }
     settings = {"judgment": JUDGMENT, "tools": ["calculator", "read_file"], "action": "mark"}
     with load_plugin(ROOT, tmp_path, config=config, settings=settings) as loaded:
@@ -350,13 +352,13 @@ async def test_end_to_end_clean_checker_keeps_result(plugin, monkeypatch):
 async def test_end_to_end_marked_hit_on_a_control_result_is_withheld(plugin, checker):
     prompt = json.dumps({"oauth_connection_required": True, "message": INJECTION})
     saved = await plugin.call_tool(
-        "file", "save_file", {"contents": prompt, "file_name": "prompt.json"}, agent="helper", sender=ALICE, room=ROOM
+        "coding", "write_file", {"path": "prompt.json", "content": prompt}, agent="helper", sender=ALICE, room=ROOM
     )
     assert saved.status == "ok"
     result = await plugin.call_tool(
-        "file", "read_file", {"file_name": "prompt.json"}, agent="helper", sender=ALICE, room=ROOM
+        "coding", "read_file", {"path": "prompt.json"}, agent="helper", sender=ALICE, room=ROOM
     )
-    assert checker.texts == [prompt]
+    assert checker.texts == [f"1| {prompt}"]  # `read_file` numbers the lines it returns
     assert "attacker" not in f"{result.value}{result.failure_text}"
     assert "withheld" in f"{result.value}{result.failure_text}"
 
