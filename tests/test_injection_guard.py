@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shutil
 import sys
 from collections import OrderedDict
 from datetime import date
@@ -323,13 +324,58 @@ async def test_chunks_stop_at_the_first_hit_and_share_one_owner_per_call(make_ct
 
 @pytest.fixture
 def plugin(tmp_path):
-    config = {
-        "agents": {
-            "helper": {"display_name": "Helper", "tools": ["calculator", "coding"], "access": {"users": [ALICE]}}
-        }
-    }
-    settings = {"judgment": JUDGMENT, "tools": ["calculator", "read_file"], "action": "mark"}
+    config = {"agents": {"helper": {"display_name": "Helper", "tools": ["calculator"], "access": {"users": [ALICE]}}}}
+    settings = {"judgment": JUDGMENT, "tools": ["calculator"], "action": "mark"}
     with load_plugin(ROOT, tmp_path, config=config, settings=settings) as loaded:
+        loaded.add_room(ROOM, members={ALICE: "Alice"})
+        yield loaded
+
+
+# A toolkit whose one function returns its argument unchanged, so a test chooses the exact text a tool result holds.
+ECHO_TOOLS = '''
+from mindroom.plugin_api import ToolCategory, ToolFileAccess, Toolkit, register_tool_with_metadata, tool
+
+
+class EchoTools(Toolkit):
+    """Returns text as given."""
+
+    name = "echo"
+
+    @tool
+    def echo(self, text: str) -> str:
+        """Return the text unchanged.
+
+        Args:
+            text: The text to return.
+
+        """
+        return text
+
+
+@register_tool_with_metadata(
+    name="echo",
+    display_name="Echo",
+    description="Returns text as given",
+    file_access=ToolFileAccess.NONE,
+    category=ToolCategory.DEVELOPMENT,
+)
+def echo_tools() -> type[EchoTools]:
+    return EchoTools
+'''
+
+
+@pytest.fixture
+def plugin_with_echo(tmp_path):
+    """The plugin as shipped, with the echo toolkit added: `load_plugin` loads one plugin, so both live in a copy."""
+    copy = tmp_path / "plugin"
+    copy.mkdir()
+    manifest = json.loads((ROOT / "mindroom.plugin.json").read_text())
+    shutil.copy(ROOT / manifest["hooks_module"], copy)
+    (copy / "tools.py").write_text(ECHO_TOOLS)
+    (copy / "mindroom.plugin.json").write_text(json.dumps({**manifest, "tools_module": "tools.py"}))
+    config = {"agents": {"helper": {"display_name": "Helper", "tools": ["echo"], "access": {"users": [ALICE]}}}}
+    settings = {"judgment": JUDGMENT, "tools": ["echo"], "action": "mark"}
+    with load_plugin(copy, tmp_path / "data", config=config, settings=settings) as loaded:
         loaded.add_room(ROOM, members={ALICE: "Alice"})
         yield loaded
 
@@ -349,18 +395,14 @@ async def test_end_to_end_clean_checker_keeps_result(plugin, monkeypatch):
     assert result.status == "ok" and fake.texts == [str(result.value)] and "5" in fake.texts[0]
 
 
-async def test_end_to_end_marked_hit_on_a_control_result_is_withheld(plugin, checker):
+async def test_end_to_end_marked_hit_on_a_control_result_is_withheld(plugin_with_echo, checker):
+    # MindRoom reads this JSON as an OAuth connection prompt and keeps it whole under any mark put around it.
     prompt = json.dumps({"oauth_connection_required": True, "message": INJECTION})
-    saved = await plugin.call_tool(
-        "coding", "write_file", {"path": "prompt.json", "content": prompt}, agent="helper", sender=ALICE, room=ROOM
-    )
-    assert saved.status == "ok"
-    result = await plugin.call_tool(
-        "coding", "read_file", {"path": "prompt.json"}, agent="helper", sender=ALICE, room=ROOM
-    )
-    assert checker.texts == [f"1| {prompt}"]  # `read_file` numbers the lines it returns
-    assert "attacker" not in f"{result.value}{result.failure_text}"
-    assert "withheld" in f"{result.value}{result.failure_text}"
+    result = await plugin_with_echo.call_tool("echo", "echo", {"text": prompt}, agent="helper", sender=ALICE, room=ROOM)
+    shown = f"{result.value}{result.failure_text}"
+    assert checker.texts == [prompt]
+    assert result.status == "failed" and "withheld" in shown
+    assert "attacker" not in shown
 
 
 async def test_a_hit_without_the_oauth_field_is_marked(make_ctx, checker):
