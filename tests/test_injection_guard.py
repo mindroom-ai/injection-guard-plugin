@@ -180,19 +180,26 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
     assert checker.owners == []
 
 
+def _live_function(toolkit: str, *candidates: str) -> str:
+    live = builtin_tool_registry().entries[toolkit].function_names
+    function = next((name for name in candidates if name in live), None)
+    assert function is not None, f"{toolkit}: none of {candidates} in {live}"
+    return function
+
+
 @pytest.mark.parametrize(
     ("target", "expected"),
     [
-        ("get_latest_emails", True),  # gmail
+        pytest.param(("gmail", ("gmail_read", "get_latest_emails")), True, id="gmail"),
         ("outlook_mail_search", True),
-        ("list_events", True),  # google_calendar
+        pytest.param(("google_calendar", ("google_calendar_read", "list_events")), True, id="google_calendar"),
         ("read_url", True),  # website, jina
         ("web_search", True),  # duckduckgo, googlesearch
         ("slack_read", True),
         pytest.param(("discord", ("discord_read", "get_channel_messages")), True, id="discord"),
-        ("google_drive_read_file", True),
+        pytest.param(("google_drive", ("google_drive_read", "google_drive_read_file")), True, id="google_drive"),
         ("google_docs_get_document", True),
-        ("read_sheet", True),  # google_sheets
+        pytest.param(("google_sheets", ("google_sheets_read", "read_sheet")), True, id="google_sheets"),
         pytest.param(("notion", ("notion_search", "search_pages")), True, id="notion"),
         ("get_page_content", True),  # browserbase
         ("confluence_get_page", True),  # atlassian
@@ -204,22 +211,19 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
         ("read_file", False),  # filesystem, file, coding
         ("matrix_message", False),
         ("make_request", False),  # custom_api
-        ("get_issue", False),  # github
+        pytest.param(("github", ("github_read_issues_prs", "get_issue")), False, id="github"),
         ("jira_get_issue", False),  # atlassian
         pytest.param(("webex", ("webex_read", "list_rooms")), False, id="webex"),
         pytest.param(("email", ("smtp_send_email", "email_user")), False, id="email"),  # send-only email
     ],
 )
 async def test_default_tools_match_outside_text_readers(make_ctx, checker, target, expected):
-    entries = builtin_tool_registry().entries
     if isinstance(target, str):
         function = target
-        assert any(function in meta.function_names for meta in entries.values()), function
+        assert any(function in meta.function_names for meta in builtin_tool_registry().entries.values()), function
     else:
         toolkit, candidates = target
-        live = entries[toolkit].function_names
-        function = next((name for name in candidates if name in live), None)
-        assert function is not None, f"{toolkit}: none of {candidates} in {live}"
+        function = _live_function(toolkit, *candidates)
     assert (await guard.injection_guard(make_ctx(INJECTION, tool_name=function)) is not None) is expected
 
 
@@ -234,8 +238,9 @@ async def test_legacy_confluence_toolkit_remains_guarded_by_default(make_ctx, ch
 
 
 async def test_toolkit_name_glob_matches_its_functions(make_ctx, checker):
-    # get_latest_emails is a gmail function; only the toolkit glob names it.
-    ctx = make_ctx(INJECTION, tool_name="get_latest_emails", tools=["gmail"])
+    # Pick the live gmail read function; only the toolkit glob ("gmail", no wildcard) matches it.
+    function = _live_function("gmail", "gmail_read", "get_latest_emails")
+    ctx = make_ctx(INJECTION, tool_name=function, tools=["gmail"])
     assert await guard.injection_guard(ctx) is not None
     assert await guard.injection_guard(make_ctx(INJECTION, tool_name="read_url", tools=["gmail"])) is None
 
