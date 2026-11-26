@@ -181,7 +181,7 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
 
 
 @pytest.mark.parametrize(
-    ("function", "expected"),
+    ("target", "expected"),
     [
         ("get_latest_emails", True),  # gmail
         ("outlook_mail_search", True),
@@ -189,11 +189,11 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
         ("read_url", True),  # website, jina
         ("web_search", True),  # duckduckgo, googlesearch
         ("slack_read", True),
-        ("get_channel_messages", True),  # discord
+        pytest.param(("discord", ("discord_read", "get_channel_messages")), True, id="discord"),
         ("google_drive_read_file", True),
         ("google_docs_get_document", True),
         ("read_sheet", True),  # google_sheets
-        ("search_pages", True),  # notion
+        pytest.param(("notion", ("notion_search", "search_pages")), True, id="notion"),
         ("get_page_content", True),  # browserbase
         ("confluence_get_page", True),  # atlassian
         ("microsoft_files_get_file", True),
@@ -201,16 +201,25 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
         ("microsoft_onenote_get_page", True),
         ("add", False),  # calculator
         ("run_shell_command", False),
-        ("read_file", False),  # file, coding
+        ("read_file", False),  # filesystem, file, coding
         ("matrix_message", False),
         ("make_request", False),  # custom_api
         ("get_issue", False),  # github
         ("jira_get_issue", False),  # atlassian
-        ("list_rooms", False),  # webex
-        ("email_user", False),  # send-only email
+        pytest.param(("webex", ("webex_read", "list_rooms")), False, id="webex"),
+        pytest.param(("email", ("smtp_send_email", "email_user")), False, id="email"),  # send-only email
     ],
 )
-async def test_default_tools_match_outside_text_readers(make_ctx, checker, function, expected):
+async def test_default_tools_match_outside_text_readers(make_ctx, checker, target, expected):
+    entries = builtin_tool_registry().entries
+    if isinstance(target, str):
+        function = target
+        assert any(function in meta.function_names for meta in entries.values()), function
+    else:
+        toolkit, candidates = target
+        live = entries[toolkit].function_names
+        function = next((name for name in candidates if name in live), None)
+        assert function is not None, f"{toolkit}: none of {candidates} in {live}"
     assert (await guard.injection_guard(make_ctx(INJECTION, tool_name=function)) is not None) is expected
 
 
