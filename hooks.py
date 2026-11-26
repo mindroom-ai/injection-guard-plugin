@@ -38,7 +38,7 @@ DEFAULT_TOOLS = (
     *("searxng", "tavily", "exa", "linkup", "duckduckgo", "googlesearch", "baidusearch", "wikipedia", "arxiv"),
     *("pubmed", "google_scholar", "hackernews", "reddit", "youtube", "x"),
     # shared documents
-    *("google_drive", "google_docs", "google_sheets", "notion", "atlassian"),
+    *("google_drive", "google_docs", "google_sheets", "notion", "confluence*"),
     *("microsoft_files", "microsoft_sharepoint", "microsoft_onenote"),
     # chat networks the agent reads
     *("slack", "discord", "microsoft_teams"),

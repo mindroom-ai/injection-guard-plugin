@@ -196,7 +196,6 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
         ("search_pages", True),  # notion
         ("get_page_content", True),  # browserbase
         ("confluence_get_page", True),  # atlassian
-        ("jira_get_issue", True),  # atlassian
         ("microsoft_files_get_file", True),
         ("microsoft_sharepoint_get_page", True),
         ("microsoft_onenote_get_page", True),
@@ -206,12 +205,23 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
         ("matrix_message", False),
         ("make_request", False),  # custom_api
         ("get_issue", False),  # github
+        ("jira_get_issue", False),  # atlassian
         ("list_rooms", False),  # webex
         ("email_user", False),  # send-only email
     ],
 )
 async def test_default_tools_match_outside_text_readers(make_ctx, checker, function, expected):
     assert (await guard.injection_guard(make_ctx(INJECTION, tool_name=function)) is not None) is expected
+
+
+async def test_legacy_confluence_toolkit_remains_guarded_by_default(make_ctx, checker, monkeypatch):
+    entries = builtin_tool_registry().entries
+    if "confluence" not in entries:
+        patched = {**entries, "confluence": SimpleNamespace(function_names=("get_all_page_from_space",))}
+        monkeypatch.setattr(
+            guard, "config_plugins", lambda config, paths: SimpleNamespace(tools=SimpleNamespace(entries=patched))
+        )
+    assert await guard.injection_guard(make_ctx(INJECTION, tool_name="get_all_page_from_space")) is not None
 
 
 async def test_toolkit_name_glob_matches_its_functions(make_ctx, checker):
