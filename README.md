@@ -84,8 +84,8 @@ With GPT-6 Luna a short result costs about $0.00006 (400 to 500 input and 40 out
 <summary><b>Default tools</b></summary>
 
 - mail and calendar: `gmail`, `outlook_mail`, `google_calendar`, `outlook_calendar`
-- web fetch, scrape, and search: `website`, `browser`, `browser_mcp`, `web_browser_tools`, `browserbase`, `crawl4ai`, `firecrawl`, `jina`, `newspaper`, `trafilatura`, `spider`, `scrapegraph`, `agentql`, `brightdata`, `oxylabs`, `serper`, `serpapi`, `searxng`, `tavily`, `exa`, `linkup`, `duckduckgo`, `googlesearch`, `baidusearch`, `wikipedia`, `arxiv`, `pubmed`, `google_scholar`, `hackernews`, `reddit`, `youtube`, `x`
-- shared documents: `google_drive`, `google_docs`, `google_sheets`, `notion`, `confluence`, `microsoft_files`, `microsoft_sharepoint`, `microsoft_onenote`
+- web fetch, scrape, and search: `website`, `browser`, `browser_mcp`, `browserbase`, `crawl4ai`, `firecrawl`, `jina`, `newspaper`, `trafilatura`, `spider`, `scrapegraph`, `agentql`, `brightdata`, `oxylabs`, `serper`, `serpapi`, `searxng`, `tavily`, `exa`, `linkup`, `duckduckgo`, `googlesearch`, `baidusearch`, `wikipedia`, `arxiv`, `pubmed`, `google_scholar`, `hackernews`, `reddit`, `youtube`, `x`
+- shared documents: `google_drive`, `google_docs`, `google_sheets`, `notion`, `atlassian`, `microsoft_files`, `microsoft_sharepoint`, `microsoft_onenote`
 - chat networks: `slack`, `discord`, `microsoft_teams`
 - every enabled MCP server: `mcp_*`
 

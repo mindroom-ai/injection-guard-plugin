@@ -33,12 +33,12 @@ DEFAULT_TOOLS = (
     # mail and calendar
     *("gmail", "outlook_mail", "google_calendar", "outlook_calendar"),
     # web fetch, scrape and search
-    *("website", "browser", "browser_mcp", "web_browser_tools", "browserbase", "crawl4ai", "firecrawl", "jina"),
+    *("website", "browser", "browser_mcp", "browserbase", "crawl4ai", "firecrawl", "jina"),
     *("newspaper", "trafilatura", "spider", "scrapegraph", "agentql", "brightdata", "oxylabs", "serper", "serpapi"),
     *("searxng", "tavily", "exa", "linkup", "duckduckgo", "googlesearch", "baidusearch", "wikipedia", "arxiv"),
     *("pubmed", "google_scholar", "hackernews", "reddit", "youtube", "x"),
     # shared documents
-    *("google_drive", "google_docs", "google_sheets", "notion", "confluence"),
+    *("google_drive", "google_docs", "google_sheets", "notion", "atlassian"),
     *("microsoft_files", "microsoft_sharepoint", "microsoft_onenote"),
     # chat networks the agent reads
     *("slack", "discord", "microsoft_teams"),

@@ -194,7 +194,9 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
         ("google_docs_get_document", True),
         ("read_sheet", True),  # google_sheets
         ("search_pages", True),  # notion
-        ("get_page_content", True),  # confluence, browserbase
+        ("get_page_content", True),  # browserbase
+        ("confluence_get_page", True),  # atlassian
+        ("jira_get_issue", True),  # atlassian
         ("microsoft_files_get_file", True),
         ("microsoft_sharepoint_get_page", True),
         ("microsoft_onenote_get_page", True),
@@ -203,7 +205,7 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
         ("read_file", False),  # file, coding
         ("matrix_message", False),
         ("make_request", False),  # custom_api
-        ("get_issue", False),  # github, jira
+        ("get_issue", False),  # github
         ("list_rooms", False),  # webex
         ("email_user", False),  # send-only email
     ],
