@@ -196,10 +196,10 @@ def _live_function(toolkit: str, *candidates: str) -> str:
         ("read_url", True),  # website, jina
         pytest.param(("duckduckgo", ("duckduckgo_search", "web_search")), True, id="duckduckgo"),
         pytest.param(("googlesearch", ("google_search", "web_search")), True, id="googlesearch"),
-        pytest.param(("slack", ("slack_inspect", "slack_read")), True, id="slack"),
+        pytest.param(("slack", ("slack_read", "slack_inspect")), True, id="slack"),
         pytest.param(("discord", ("discord_read", "get_channel_messages")), True, id="discord"),
         pytest.param(("google_drive", ("google_drive_read", "google_drive_read_file")), True, id="google_drive"),
-        ("google_docs_get_document", True),
+        pytest.param(("google_docs", ("google_docs_read", "google_docs_get_document")), True, id="google_docs"),
         pytest.param(("google_sheets", ("google_sheets_read", "read_sheet")), True, id="google_sheets"),
         pytest.param(("notion", ("notion_search", "search_pages")), True, id="notion"),
         pytest.param(("browserbase", ("browserbase", "get_page_content")), True, id="browserbase"),
