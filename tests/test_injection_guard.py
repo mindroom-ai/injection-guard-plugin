@@ -92,9 +92,18 @@ def checker(monkeypatch):
     return fake
 
 
+def _live_function(toolkit: str, *candidates: str) -> str:
+    live = builtin_tool_registry().entries[toolkit].function_names
+    function = next((name for name in candidates if name in live), None)
+    assert function is not None, f"{toolkit}: none of {candidates} in {live}"
+    return function
+
+
 @pytest.fixture
 def make_ctx(tmp_path):
-    def make(result: str, tool_name: str = "read_url", config: dict | None = None, **settings):
+    default_tool = _live_function("website", "website_read_url", "read_url")
+
+    def make(result: str, tool_name: str = default_tool, config: dict | None = None, **settings):
         return ToolResultTransformContext(
             config=Config.model_validate(config or {"agents": {"helper": {"display_name": "Helper"}}}),
             runtime_paths=resolve_runtime_paths(
@@ -180,20 +189,14 @@ async def test_empty_result_is_not_checked(make_ctx, checker):
     assert checker.owners == []
 
 
-def _live_function(toolkit: str, *candidates: str) -> str:
-    live = builtin_tool_registry().entries[toolkit].function_names
-    function = next((name for name in candidates if name in live), None)
-    assert function is not None, f"{toolkit}: none of {candidates} in {live}"
-    return function
-
-
 @pytest.mark.parametrize(
     ("target", "expected"),
     [
         pytest.param(("gmail", ("gmail_read", "get_latest_emails")), True, id="gmail"),
         pytest.param(("outlook_mail", ("outlook_mail_read", "outlook_mail_search")), True, id="outlook_mail"),
         pytest.param(("google_calendar", ("google_calendar_read", "list_events")), True, id="google_calendar"),
-        ("read_url", True),  # website, jina
+        pytest.param(("website", ("website_read_url", "read_url")), True, id="website"),
+        pytest.param(("jina", ("jina_read_url", "read_url")), True, id="jina"),
         pytest.param(("duckduckgo", ("duckduckgo_search", "web_search")), True, id="duckduckgo"),
         pytest.param(("googlesearch", ("google_search", "web_search")), True, id="googlesearch"),
         pytest.param(("slack", ("slack_read", "slack_inspect")), True, id="slack"),
@@ -221,7 +224,7 @@ def _live_function(toolkit: str, *candidates: str) -> str:
         ("run_shell_command", False),
         ("read_file", False),  # filesystem, file, coding
         ("matrix_message", False),
-        ("make_request", False),  # custom_api
+        pytest.param(("custom_api", ("custom_api_request", "make_request")), False, id="custom_api"),
         pytest.param(("github", ("github_read_issues_prs", "get_issue")), False, id="github"),
         pytest.param(("atlassian", ("jira_read", "jira_get_issue")), False, id="atlassian_jira"),
         pytest.param(("webex", ("webex_read", "list_rooms")), False, id="webex"),
@@ -253,7 +256,8 @@ async def test_toolkit_name_glob_matches_its_functions(make_ctx, checker):
     function = _live_function("gmail", "gmail_read", "get_latest_emails")
     ctx = make_ctx(INJECTION, tool_name=function, tools=["gmail"])
     assert await guard.injection_guard(ctx) is not None
-    assert await guard.injection_guard(make_ctx(INJECTION, tool_name="read_url", tools=["gmail"])) is None
+    other = _live_function("website", "website_read_url", "read_url")
+    assert await guard.injection_guard(make_ctx(INJECTION, tool_name=other, tools=["gmail"])) is None
 
 
 async def test_function_name_glob_matches(make_ctx, checker):
@@ -295,7 +299,7 @@ async def test_clean_result_passes_unchanged(make_ctx, checker):
     assert await guard.injection_guard(ctx) is None
     assert checker.texts == ["The weather in Amsterdam is mild today."]
     assert _logged(ctx) == {
-        "tool": "read_url",
+        "tool": ctx.tool_name,
         "agent": "helper",
         "chars": 39,
         "chunks": 1,
@@ -307,7 +311,7 @@ async def test_clean_result_passes_unchanged(make_ctx, checker):
 async def test_hit_is_withheld_without_the_result_text(make_ctx, checker):
     ctx = make_ctx(f"Welcome! {INJECTION}")
     notice = await guard.injection_guard(ctx)
-    assert "read_url" in notice and "withheld" in notice
+    assert ctx.tool_name in notice and "withheld" in notice
     assert "Welcome" not in notice and "attacker" not in notice
     assert _logged(ctx)["verdict"] == "hit" and _logged(ctx)["action"] == "withhold"
     assert "Welcome" not in str(ctx.logger.mock_calls)
