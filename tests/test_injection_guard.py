@@ -191,22 +191,33 @@ def _live_function(toolkit: str, *candidates: str) -> str:
     ("target", "expected"),
     [
         pytest.param(("gmail", ("gmail_read", "get_latest_emails")), True, id="gmail"),
-        ("outlook_mail_search", True),
+        pytest.param(("outlook_mail", ("outlook_mail_read", "outlook_mail_search")), True, id="outlook_mail"),
         pytest.param(("google_calendar", ("google_calendar_read", "list_events")), True, id="google_calendar"),
         ("read_url", True),  # website, jina
-        ("web_search", True),  # duckduckgo, googlesearch
+        pytest.param(("duckduckgo", ("duckduckgo_search", "web_search")), True, id="duckduckgo"),
+        pytest.param(("googlesearch", ("google_search", "web_search")), True, id="googlesearch"),
         ("slack_read", True),
         pytest.param(("discord", ("discord_read", "get_channel_messages")), True, id="discord"),
         pytest.param(("google_drive", ("google_drive_read", "google_drive_read_file")), True, id="google_drive"),
         ("google_docs_get_document", True),
         pytest.param(("google_sheets", ("google_sheets_read", "read_sheet")), True, id="google_sheets"),
         pytest.param(("notion", ("notion_search", "search_pages")), True, id="notion"),
-        ("get_page_content", True),  # browserbase
+        pytest.param(("browserbase", ("browserbase", "get_page_content")), True, id="browserbase"),
         ("confluence_get_page", True),  # atlassian
-        ("microsoft_files_get_file", True),
-        ("microsoft_sharepoint_get_page", True),
-        ("microsoft_onenote_get_page", True),
-        ("add", False),  # calculator
+        pytest.param(
+            ("microsoft_files", ("microsoft_files_read", "microsoft_files_get_file")), True, id="microsoft_files"
+        ),
+        pytest.param(
+            ("microsoft_sharepoint", ("microsoft_sharepoint_read", "microsoft_sharepoint_get_page")),
+            True,
+            id="microsoft_sharepoint",
+        ),
+        pytest.param(
+            ("microsoft_onenote", ("microsoft_onenote_read", "microsoft_onenote_get_page")),
+            True,
+            id="microsoft_onenote",
+        ),
+        pytest.param(("calculator", ("calculate", "add")), False, id="calculator"),
         ("run_shell_command", False),
         ("read_file", False),  # filesystem, file, coding
         ("matrix_message", False),
@@ -406,17 +417,29 @@ def plugin_with_echo(tmp_path):
         yield loaded
 
 
+def _calculator_add_call() -> tuple[str, dict[str, object]]:
+    function = _live_function("calculator", "calculate", "add")
+    if function == "calculate":
+        return function, {"action": "add", "a": 2, "b": 3}
+    return function, {"a": 2, "b": 3}
+
+
 async def test_end_to_end_raising_checker_withholds_result(plugin, monkeypatch):
     monkeypatch.setattr(evaluator, "create_judgment_evaluator", FakeChecker(failure="timeout").factory)
-    result = await plugin.call_tool("calculator", "add", {"a": 2, "b": 3}, agent="helper", sender=ALICE, room=ROOM)
-    assert "The result of add was withheld because a result check failed." in f"{result.value}{result.failure_text}"
+    function, arguments = _calculator_add_call()
+    result = await plugin.call_tool("calculator", function, arguments, agent="helper", sender=ALICE, room=ROOM)
+    assert (
+        f"The result of {function} was withheld because a result check failed."
+        in f"{result.value}{result.failure_text}"
+    )
     assert result.status == "failed" and "5" not in f"{result.value}{result.failure_text}"
 
 
 async def test_end_to_end_clean_checker_keeps_result(plugin, monkeypatch):
     fake = FakeChecker(decision=False)
     monkeypatch.setattr(evaluator, "create_judgment_evaluator", fake.factory)
-    result = await plugin.call_tool("calculator", "add", {"a": 2, "b": 3}, agent="helper", sender=ALICE, room=ROOM)
+    function, arguments = _calculator_add_call()
+    result = await plugin.call_tool("calculator", function, arguments, agent="helper", sender=ALICE, room=ROOM)
     # The checker read the call's own text, and the model reads that same text.
     assert result.status == "ok" and fake.texts == [str(result.value)] and "5" in fake.texts[0]
 
